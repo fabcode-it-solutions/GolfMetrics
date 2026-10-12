@@ -1,0 +1,51 @@
+name: Course scan training
+
+# Teaches the course scan from courses traced on OpenStreetMap, saves the model to lib/scan-model.json
+# on this branch, then checks hole by hole how well it does.
+on:
+  push:
+    paths:
+      - 'lib/scan.js'
+      - 'tests/scan-eval/**'
+      - '.github/workflows/scan-eval.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scan-training-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Train
+        if: ${{ !contains(github.event.head_commit.message, '[check only]') }}
+        run: node tests/scan-eval/train.js
+      - name: Save the model
+        if: ${{ !contains(github.event.head_commit.message, '[check only]') }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898+github-actions[bot]@users.noreply.github.com"
+          cp lib/scan-model.json /tmp/scan-model.json
+          for i in 1 2 3 4; do
+            git fetch origin "${GITHUB_REF_NAME}" && git reset -q --hard "origin/${GITHUB_REF_NAME}"
+            cp /tmp/scan-model.json lib/scan-model.json
+            git add lib/scan-model.json
+            git diff --cached --quiet && exit 0
+            git commit -q -m "Course scan: retrained model"
+            git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Check on real courses
+        run: node tests/scan-eval/eval.js
